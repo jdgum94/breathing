@@ -1,0 +1,233 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Breathwork</title>
+  <style>
+    /* Mobile-first, dark mode styling */
+    body {
+      font-family: system-ui, -apple-system, sans-serif;
+      background-color: #12141c;
+      color: #ffffff;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      margin: 0;
+      overflow: hidden;
+    }
+
+    .controls {
+      position: absolute;
+      top: 10%;
+      display: flex;
+      flex-direction: column;
+      gap: 15px;
+      z-index: 10;
+      width: 90%;
+      max-width: 350px;
+    }
+
+    select, button {
+      padding: 14px;
+      font-size: 16px;
+      border-radius: 12px;
+      border: none;
+      outline: none;
+      cursor: pointer;
+      font-weight: 600;
+      text-align: center;
+    }
+
+    select {
+      background-color: #2a2e40;
+      color: white;
+      appearance: none;
+    }
+
+    button {
+      background-color: #4facfe;
+      color: #000;
+      transition: background-color 0.2s;
+    }
+
+    button:hover {
+      background-color: #00f2fe;
+    }
+
+    button.stop {
+      background-color: #ff4b4b;
+      color: white;
+    }
+
+    /* Breathing Circle Setup */
+    .breathing-area {
+      position: relative;
+      width: 300px;
+      height: 300px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      margin-top: 50px;
+    }
+
+    .circle {
+      position: absolute;
+      width: 80px;
+      height: 80px;
+      border-radius: 50%;
+      background: radial-gradient(circle, #4facfe 0%, #00f2fe 100%);
+      box-shadow: 0 0 30px rgba(79, 172, 254, 0.4);
+      /* Transform is set via JS, but we define the property here for smooth hardware-accelerated animations */
+      transition-property: transform;
+      transition-timing-function: linear; 
+    }
+
+    .instruction {
+      position: absolute;
+      font-size: 28px;
+      font-weight: bold;
+      text-shadow: 0px 2px 10px rgba(0,0,0,0.8);
+      z-index: 5;
+    }
+  </style>
+</head>
+<body>
+
+  <div class="controls">
+    <select id="patternSelect">
+      <option value="478">Relaxing (4-7-8)</option>
+      <option value="box">Box Breathing (4-4-4-4)</option>
+      <option value="resonance">Resonance (5-5)</option>
+    </select>
+    <button id="toggleBtn">Start</button>
+  </div>
+
+  <div class="breathing-area">
+    <div class="circle" id="circle"></div>
+    <div class="instruction" id="instruction">Ready</div>
+  </div>
+
+  <script>
+    // --- Configuration ---
+    // Define patterns: duration is in milliseconds. Scale is how large the circle gets.
+    const patterns = {
+      '478': [
+        { name: 'Inhale', duration: 4000, scale: 3 },
+        { name: 'Hold', duration: 7000, scale: 3 },
+        { name: 'Exhale', duration: 8000, scale: 1 }
+      ],
+      'box': [
+        { name: 'Inhale', duration: 4000, scale: 3 },
+        { name: 'Hold', duration: 4000, scale: 3 },
+        { name: 'Exhale', duration: 4000, scale: 1 },
+        { name: 'Hold', duration: 4000, scale: 1 }
+      ],
+      'resonance': [
+        { name: 'Inhale', duration: 5000, scale: 3 },
+        { name: 'Exhale', duration: 5000, scale: 1 }
+      ]
+    };
+
+    // --- State Variables ---
+    let isRunning = false;
+    let currentLoopId = null;
+    let audioCtx;
+
+    // --- DOM Elements ---
+    const toggleBtn = document.getElementById('toggleBtn');
+    const patternSelect = document.getElementById('patternSelect');
+    const circle = document.getElementById('circle');
+    const instruction = document.getElementById('instruction');
+
+    // --- Helper Functions ---
+    // Sleep function to pause execution cleanly using Promises
+    const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+
+    // Audio generator using Web Audio API (creates a soft chime)
+    function playChime(type) {
+      if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      if (audioCtx.state === 'suspended') audioCtx.resume();
+
+      const osc = audioCtx.createOscillator();
+      const gainNode = audioCtx.createGain();
+      
+      // Different tones for different phases
+      if (type === 'Inhale') osc.frequency.value = 440; // A4
+      else if (type === 'Exhale') osc.frequency.value = 349.23; // F4
+      else osc.frequency.value = 392.00; // G4 (Hold)
+
+      osc.type = 'sine';
+      
+      // Envelope to make it sound soft and bell-like
+      gainNode.gain.setValueAtTime(0, audioCtx.currentTime);
+      gainNode.gain.linearRampToValueAtTime(0.15, audioCtx.currentTime + 0.1);
+      gainNode.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 1.5);
+
+      osc.connect(gainNode);
+      gainNode.connect(audioCtx.destination);
+
+      osc.start(audioCtx.currentTime);
+      osc.stop(audioCtx.currentTime + 1.5);
+    }
+
+    // --- Main Logic ---
+    async function runBreathingLoop(patternKey) {
+      const pattern = patterns[patternKey];
+      
+      // Create a unique ID for this run. If the user stops/starts quickly, 
+      // this prevents overlapping loops from competing with each other.
+      const loopId = Symbol();
+      currentLoopId = loopId;
+
+      while (isRunning && currentLoopId === loopId) {
+        for (let phase of pattern) {
+          // Break out immediately if stopped
+          if (!isRunning || currentLoopId !== loopId) break;
+
+          // Update Text and Audio
+          instruction.innerText = phase.name;
+          playChime(phase.name);
+
+          // Update Circle Animation
+          circle.style.transitionDuration = `${phase.duration}ms`;
+          circle.style.transform = `scale(${phase.scale})`;
+
+          // Wait for the duration of the phase before moving to the next
+          await sleep(phase.duration);
+        }
+      }
+    }
+
+    function stopBreathing() {
+      isRunning = false;
+      currentLoopId = null;
+      toggleBtn.innerText = 'Start';
+      toggleBtn.classList.remove('stop');
+      instruction.innerText = 'Ready';
+      circle.style.transitionDuration = '1000ms';
+      circle.style.transform = 'scale(1)';
+      patternSelect.disabled = false;
+    }
+
+    // --- Event Listeners ---
+    toggleBtn.addEventListener('click', () => {
+      if (isRunning) {
+        stopBreathing();
+      } else {
+        isRunning = true;
+        toggleBtn.innerText = 'Stop';
+        toggleBtn.classList.add('stop');
+        patternSelect.disabled = true; // Prevent changing pattern while running
+        
+        // Initialize audio context on first user interaction (browser security rule)
+        if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        
+        runBreathingLoop(patternSelect.value);
+      }
+    });
+  </script>
+</body>
+</html>
