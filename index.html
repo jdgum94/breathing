@@ -5,7 +5,6 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Breathwork</title>
   <style>
-    /* Mobile-first, dark mode styling */
     body {
       font-family: system-ui, -apple-system, sans-serif;
       background-color: #12141c;
@@ -24,7 +23,7 @@
       top: 10%;
       display: flex;
       flex-direction: column;
-      gap: 15px;
+      gap: 12px;
       z-index: 10;
       width: 90%;
       max-width: 350px;
@@ -47,6 +46,11 @@
       appearance: none;
     }
 
+    select:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+
     button {
       background-color: #4facfe;
       color: #000;
@@ -62,7 +66,6 @@
       color: white;
     }
 
-    /* Breathing Circle Setup */
     .breathing-area {
       position: relative;
       width: 300px;
@@ -80,9 +83,8 @@
       border-radius: 50%;
       background: radial-gradient(circle, #4facfe 0%, #00f2fe 100%);
       box-shadow: 0 0 30px rgba(79, 172, 254, 0.4);
-      /* Transform is set via JS, but we define the property here for smooth hardware-accelerated animations */
-      transition-property: transform;
-      transition-timing-function: linear; 
+      /* Add transition for smooth color changes */
+      transition: transform linear, background 0.5s ease, box-shadow 0.5s ease;
     }
 
     .instruction {
@@ -91,6 +93,16 @@
       font-weight: bold;
       text-shadow: 0px 2px 10px rgba(0,0,0,0.8);
       z-index: 5;
+      text-align: center;
+      line-height: 1.3;
+    }
+
+    .sub-instruction {
+      margin-top: 10px;
+      font-size: 16px;
+      color: #aaa;
+      height: 24px; /* Fixed height to prevent layout jumping */
+      text-align: center;
     }
   </style>
 </head>
@@ -101,7 +113,17 @@
       <option value="478">Relaxing (4-7-8)</option>
       <option value="box">Box Breathing (4-4-4-4)</option>
       <option value="resonance">Resonance (5-5)</option>
+      <option value="bolt">BOLT Score Test</option>
     </select>
+    
+    <select id="durationSelect">
+      <option value="0">Duration: Indefinite</option>
+      <option value="1">Duration: 1 Minute</option>
+      <option value="5">Duration: 5 Minutes</option>
+      <option value="10">Duration: 10 Minutes</option>
+      <option value="20">Duration: 20 Minutes</option>
+    </select>
+
     <button id="toggleBtn">Start</button>
   </div>
 
@@ -109,10 +131,9 @@
     <div class="circle" id="circle"></div>
     <div class="instruction" id="instruction">Ready</div>
   </div>
+  <div class="sub-instruction" id="subInstruction"></div>
 
   <script>
-    // --- Configuration ---
-    // Define patterns: duration is in milliseconds. Scale is how large the circle gets.
     const patterns = {
       '478': [
         { name: 'Inhale', duration: 4000, scale: 3 },
@@ -131,22 +152,21 @@
       ]
     };
 
-    // --- State Variables ---
     let isRunning = false;
     let currentLoopId = null;
     let audioCtx;
+    let sessionTimer = null;
+    let boltStartTime = 0;
 
-    // --- DOM Elements ---
     const toggleBtn = document.getElementById('toggleBtn');
     const patternSelect = document.getElementById('patternSelect');
+    const durationSelect = document.getElementById('durationSelect');
     const circle = document.getElementById('circle');
     const instruction = document.getElementById('instruction');
+    const subInstruction = document.getElementById('subInstruction');
 
-    // --- Helper Functions ---
-    // Sleep function to pause execution cleanly using Promises
     const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
-    // Audio generator using Web Audio API (creates a soft chime)
     function playChime(type) {
       if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
       if (audioCtx.state === 'suspended') audioCtx.resume();
@@ -154,65 +174,155 @@
       const osc = audioCtx.createOscillator();
       const gainNode = audioCtx.createGain();
       
-      // Different tones for different phases
-      if (type === 'Inhale') osc.frequency.value = 440; // A4
-      else if (type === 'Exhale') osc.frequency.value = 349.23; // F4
-      else osc.frequency.value = 392.00; // G4 (Hold)
+      if (type === 'Inhale') osc.frequency.value = 440; 
+      else if (type === 'Exhale') osc.frequency.value = 349.23; 
+      else osc.frequency.value = 392.00; 
 
       osc.type = 'sine';
-      
-      // Envelope to make it sound soft and bell-like
       gainNode.gain.setValueAtTime(0, audioCtx.currentTime);
       gainNode.gain.linearRampToValueAtTime(0.15, audioCtx.currentTime + 0.1);
       gainNode.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 1.5);
 
       osc.connect(gainNode);
       gainNode.connect(audioCtx.destination);
-
       osc.start(audioCtx.currentTime);
       osc.stop(audioCtx.currentTime + 1.5);
     }
 
-    // --- Main Logic ---
-    async function runBreathingLoop(patternKey) {
+    // Helper to change circle color dynamically
+    function setCircleColor(color1, color2, shadowColor) {
+      circle.style.background = `radial-gradient(circle, ${color1} 0%, ${color2} 100%)`;
+      circle.style.boxShadow = `0 0 30px ${shadowColor}`;
+    }
+
+    async function runStandardLoop(patternKey) {
       const pattern = patterns[patternKey];
-      
-      // Create a unique ID for this run. If the user stops/starts quickly, 
-      // this prevents overlapping loops from competing with each other.
       const loopId = Symbol();
       currentLoopId = loopId;
 
       while (isRunning && currentLoopId === loopId) {
         for (let phase of pattern) {
-          // Break out immediately if stopped
           if (!isRunning || currentLoopId !== loopId) break;
 
-          // Update Text and Audio
           instruction.innerText = phase.name;
           playChime(phase.name);
 
-          // Update Circle Animation
           circle.style.transitionDuration = `${phase.duration}ms`;
           circle.style.transform = `scale(${phase.scale})`;
 
-          // Wait for the duration of the phase before moving to the next
           await sleep(phase.duration);
         }
       }
     }
 
-    function stopBreathing() {
-      isRunning = false;
-      currentLoopId = null;
-      toggleBtn.innerText = 'Start';
-      toggleBtn.classList.remove('stop');
-      instruction.innerText = 'Ready';
-      circle.style.transitionDuration = '1000ms';
+    async function runBoltTest() {
+      const loopId = Symbol();
+      currentLoopId = loopId;
+      boltStartTime = 0;
+
+      // 1. Prepare: Inhale
+      instruction.innerText = "Normal Inhale";
+      playChime('Inhale');
+      circle.style.transitionDuration = '4000ms';
+      circle.style.transform = 'scale(1.5)';
+      await sleep(4000);
+      if (!isRunning || currentLoopId !== loopId) return;
+
+      // 2. Prepare: Exhale
+      instruction.innerText = "Normal Exhale";
+      playChime('Exhale');
+      circle.style.transitionDuration = '4000ms';
       circle.style.transform = 'scale(1)';
-      patternSelect.disabled = false;
+      await sleep(4000);
+      if (!isRunning || currentLoopId !== loopId) return;
+
+      // 3. Hold & Time
+      boltStartTime = Date.now();
+      playChime('Hold');
+      subInstruction.innerText = "Tap Stop at first urge";
+      
+      while (isRunning && currentLoopId === loopId) {
+        let elapsed = Math.floor((Date.now() - boltStartTime) / 1000);
+        instruction.innerHTML = `Hold<br>${elapsed}s`;
+        
+        // Update circle color based on score tier
+        if (elapsed < 10) {
+          setCircleColor('#ff4b4b', '#ff2a2a', 'rgba(255, 75, 75, 0.4)'); // Red (Poor)
+        } else if (elapsed < 20) {
+          setCircleColor('#ffa500', '#ffb732', 'rgba(255, 165, 0, 0.4)'); // Orange (Average)
+        } else if (elapsed < 40) {
+          setCircleColor('#a8ff78', '#52c234', 'rgba(168, 255, 120, 0.4)'); // Green (Good)
+        } else {
+          setCircleColor('#4facfe', '#00f2fe', 'rgba(79, 172, 254, 0.4)'); // Blue (Optimal)
+        }
+
+        // Gentle pulse to show it's active
+        circle.style.transitionDuration = '500ms';
+        circle.style.transform = elapsed % 2 === 0 ? 'scale(1.05)' : 'scale(1)';
+        
+        await sleep(200);
+      }
     }
 
-    // --- Event Listeners ---
+    function stopBreathing(autoStop = false) {
+      isRunning = false;
+      
+      if (sessionTimer) {
+        clearTimeout(sessionTimer);
+        sessionTimer = null;
+      }
+
+      toggleBtn.innerText = 'Start';
+      toggleBtn.classList.remove('stop');
+      circle.style.transitionDuration = '1000ms';
+      circle.style.transform = 'scale(1)';
+      
+      // Reset colors and text
+      setCircleColor('#4facfe', '#00f2fe', 'rgba(79, 172, 254, 0.4)');
+      subInstruction.innerText = "";
+      patternSelect.disabled = false;
+      
+      if (patternSelect.value !== 'bolt') durationSelect.disabled = false;
+
+      // Logic to display BOLT score or Session Complete
+      if (patternSelect.value === 'bolt' && boltStartTime > 0 && !autoStop) {
+        let finalTime = Math.floor((Date.now() - boltStartTime) / 1000);
+        
+        let category = "";
+        let color = "";
+        
+        if (finalTime < 10) {
+          category = "Poor";
+          color = "#ff4b4b"; 
+        } else if (finalTime < 20) {
+          category = "Average";
+          color = "#ffa500"; 
+        } else if (finalTime < 40) {
+          category = "Good";
+          color = "#a8ff78"; 
+        } else {
+          category = "Optimal";
+          color = "#4facfe"; 
+        }
+
+        instruction.innerHTML = `BOLT Score<br><span style="color:${color}; font-size: 36px;">${finalTime}s</span><br><span style="font-size:18px; color:${color};">${category}</span>`;
+        boltStartTime = 0;
+      } else {
+        instruction.innerText = autoStop ? 'Session Complete' : 'Ready';
+      }
+      
+      currentLoopId = null;
+    }
+
+    patternSelect.addEventListener('change', (e) => {
+      if (e.target.value === 'bolt') {
+        durationSelect.value = "0";
+        durationSelect.disabled = true;
+      } else {
+        durationSelect.disabled = false;
+      }
+    });
+
     toggleBtn.addEventListener('click', () => {
       if (isRunning) {
         stopBreathing();
@@ -220,12 +330,26 @@
         isRunning = true;
         toggleBtn.innerText = 'Stop';
         toggleBtn.classList.add('stop');
-        patternSelect.disabled = true; // Prevent changing pattern while running
+        patternSelect.disabled = true;
+        durationSelect.disabled = true;
         
-        // Initialize audio context on first user interaction (browser security rule)
+        // Clear previous score/sub-instructions on new start
+        subInstruction.innerText = ""; 
+
         if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
         
-        runBreathingLoop(patternSelect.value);
+        const durationMs = parseInt(durationSelect.value) * 60 * 1000;
+        if (durationMs > 0 && patternSelect.value !== 'bolt') {
+          sessionTimer = setTimeout(() => {
+            stopBreathing(true);
+          }, durationMs);
+        }
+
+        if (patternSelect.value === 'bolt') {
+          runBoltTest();
+        } else {
+          runStandardLoop(patternSelect.value);
+        }
       }
     });
   </script>
